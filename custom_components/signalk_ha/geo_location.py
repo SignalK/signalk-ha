@@ -16,7 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DEFAULT_MAX_IDLE_WRITE_SECONDS,
-    DEFAULT_MIN_UPDATE_MS,
+    DEFAULT_MIN_UPDATE_SECONDS,
     DEFAULT_PERIOD_MS,
     DEFAULT_POSITION_TOLERANCE_M,
     DEFAULT_STALE_SECONDS,
@@ -140,13 +140,14 @@ class SignalKPositionGeolocation(CoordinatorEntity, GeolocationEvent):
 
     @property
     def state_attributes(self) -> dict[str, Any]:
+        period_ms, min_update_seconds, tolerance = _position_policy(self._discovery)
         data = super().state_attributes
         data["path"] = SK_PATH_POSITION
         data["spec_known"] = self._spec_known
-        data["subscription_period_seconds"] = DEFAULT_PERIOD_MS / 1000.0
-        data["min_update_ms"] = DEFAULT_MIN_UPDATE_MS
+        data["subscription_period_seconds"] = period_ms / 1000.0
+        data["min_update_ms"] = int(min_update_seconds * 1000)
         data["stale_seconds"] = DEFAULT_STALE_SECONDS
-        data["tolerance"] = DEFAULT_POSITION_TOLERANCE_M
+        data["tolerance"] = tolerance
         if self._description:
             data["description"] = self._description
         source = self.coordinator.last_source_by_path.get(SK_PATH_POSITION)
@@ -183,8 +184,9 @@ class SignalKPositionGeolocation(CoordinatorEntity, GeolocationEvent):
         if available != self._last_available:
             return True
 
+        _, min_update_seconds, tolerance = _position_policy(self._discovery)
         now = time.monotonic()
-        if now - self._last_write < DEFAULT_MIN_UPDATE_MS / 1000.0:
+        if now - self._last_write < min_update_seconds:
             return False
         if now - self._last_write >= DEFAULT_MAX_IDLE_WRITE_SECONDS:
             last_seen = self._current_seen_at()
@@ -198,7 +200,7 @@ class SignalKPositionGeolocation(CoordinatorEntity, GeolocationEvent):
 
         if coords and self._last_coords:
             # Position tolerance reduces churn from GPS jitter while anchored.
-            return _coord_distance(coords, self._last_coords) > DEFAULT_POSITION_TOLERANCE_M
+            return _coord_distance(coords, self._last_coords) > tolerance
         return coords != self._last_coords
 
     def _current_seen_at(self) -> dt_util.dt | None:
@@ -260,6 +262,32 @@ def _position_spec_known(discovery: SignalKDiscoveryCoordinator) -> bool:
         if spec.path == SK_PATH_POSITION and spec.kind == "geo_location":
             return spec.spec_known
     return False
+
+
+def _position_policy(
+    discovery: SignalKDiscoveryCoordinator,
+) -> tuple[int, float, float]:
+    """Resolved subscription period, minimum update interval and tolerance.
+
+    Position is created from the discovery spec like a sensor, so a per-path
+    policy for navigation.position lands on that spec (see
+    ``apply_entry_policies``). The entity used module constants for all three,
+    which is why setting a policy for navigation.position had no effect.
+    """
+    period_ms = DEFAULT_PERIOD_MS
+    min_update_seconds = DEFAULT_MIN_UPDATE_SECONDS
+    tolerance = DEFAULT_POSITION_TOLERANCE_M
+    if discovery.data:
+        for spec in discovery.data.entities:
+            if spec.path == SK_PATH_POSITION and spec.kind == "geo_location":
+                if spec.period_ms:
+                    period_ms = spec.period_ms
+                if spec.min_update_seconds is not None:
+                    min_update_seconds = spec.min_update_seconds
+                if spec.tolerance is not None:
+                    tolerance = spec.tolerance
+                break
+    return period_ms, min_update_seconds, tolerance
 
 
 class _SignalKDiscoveryListener:

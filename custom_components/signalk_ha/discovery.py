@@ -139,7 +139,11 @@ def apply_entry_policies(result: DiscoveryResult, entry: Any) -> DiscoveryResult
 
     entities: list[DiscoveredEntity] = []
     for entity in result.entities:
-        if entity.kind != "sensor":
+        # Position is a geo_location entity, not a sensor, but it subscribes
+        # and throttles like one: a path policy set for navigation.position
+        # has to reach it too, otherwise the policy text box accepts the
+        # override and nothing changes.
+        if entity.kind not in ("sensor", "geo_location"):
             entities.append(entity)
             continue
 

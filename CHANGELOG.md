@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+- Path policies now apply to `navigation.position`. The position entity kept module defaults for its subscription period, minimum update interval and tolerance, so a policy set for that path was accepted and then ignored.
+
 ## 2.2.0
 
 ### Bug Fixes

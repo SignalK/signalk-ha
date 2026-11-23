@@ -3,6 +3,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from custom_components.signalk_ha.const import (
+    DEFAULT_PERIOD_MS,
+    DEFAULT_POSITION_TOLERANCE_M,
+)
 from custom_components.signalk_ha.discovery import (
     _disambiguated_name,
     _humanize_segment,
@@ -319,6 +323,64 @@ def test_discovery_apply_entry_policies_defaults_and_overrides() -> None:
 
     assert by_path["environment.wind.speedApparent"].period_ms == 2000
     assert by_path["environment.wind.speedApparent"].min_update_seconds == 2.0
+
+
+def test_discovery_apply_entry_policies_reaches_position() -> None:
+    """A policy for navigation.position has to land on the geo_location spec.
+
+    Position is not a sensor, so `apply_entry_policies` used to skip it and a
+    per-path override for it was silently dropped — the entity kept the module
+    defaults for period, minimum interval and tolerance (#22).
+    """
+    data = {
+        "navigation": {
+            "position": {
+                "value": {"latitude": 1.0, "longitude": 2.0},
+                "meta": {"units": "deg"},
+            }
+        }
+    }
+    discovered = discover_entities(data, scopes=("navigation",))
+    entry = SimpleNamespace(
+        options={
+            "default_period_ms": 2000,
+            "default_min_update_seconds": 2.0,
+            "path_policies": {
+                "navigation.position": {
+                    "period_ms": 10000,
+                    "min_update_seconds": 30.0,
+                    "tolerance": 25.0,
+                }
+            },
+        }
+    )
+
+    applied = apply_entry_policies(discovered, entry)
+    position = next(spec for spec in applied.entities if spec.path == "navigation.position")
+
+    assert position.kind == "geo_location"
+    assert position.period_ms == 10000
+    assert position.min_update_seconds == 30.0
+    assert position.tolerance == 25.0
+
+
+def test_discovery_apply_entry_policies_keeps_position_defaults_without_override() -> None:
+    data = {
+        "navigation": {
+            "position": {
+                "value": {"latitude": 1.0, "longitude": 2.0},
+                "meta": {"units": "deg"},
+            }
+        }
+    }
+    discovered = discover_entities(data, scopes=("navigation",))
+    entry = SimpleNamespace(options={})
+
+    applied = apply_entry_policies(discovered, entry)
+    position = next(spec for spec in applied.entities if spec.path == "navigation.position")
+
+    assert position.period_ms == DEFAULT_PERIOD_MS
+    assert position.tolerance == DEFAULT_POSITION_TOLERANCE_M
 
 
 def test_discovery_uses_compass_unit_from_schema_description() -> None:

@@ -20,6 +20,8 @@ from custom_components.signalk_ha.const import (
     CONF_WS_URL,
     DEFAULT_MAX_IDLE_WRITE_SECONDS,
     DEFAULT_MIN_UPDATE_MS,
+    DEFAULT_PERIOD_MS,
+    DEFAULT_POSITION_TOLERANCE_M,
     DOMAIN,
 )
 from custom_components.signalk_ha.coordinator import ConnectionState, SignalKCoordinator
@@ -575,6 +577,69 @@ def test_geo_location_should_write_state_respects_tolerance() -> None:
 
     assert geo._should_write_state((1.000001, 2.000001), True) is False
     assert geo._should_write_state((1.01, 2.01), True) is True
+
+
+def _position_spec(**overrides) -> DiscoveredEntity:
+    fields = dict(
+        path="navigation.position",
+        name="Position",
+        kind="geo_location",
+        unit=None,
+        device_class=None,
+        state_class=None,
+        conversion=None,
+        tolerance=DEFAULT_POSITION_TOLERANCE_M,
+        min_update_seconds=None,
+        description=None,
+        spec_known=True,
+        period_ms=DEFAULT_PERIOD_MS,
+    )
+    fields.update(overrides)
+    return DiscoveredEntity(**fields)
+
+
+def test_geo_location_should_write_state_uses_policy_tolerance() -> None:
+    """A 25 m tolerance from a path policy has to gate writes, not the 5 m default."""
+    entry = _make_entry()
+    spec = _position_spec(tolerance=25.0)
+    discovery = SimpleNamespace(data=DiscoveryResult(entities=[spec], conflicts=[]))
+    coordinator = SignalKCoordinator(Mock(), entry, Mock(), Mock(), SignalKAuthManager(None))
+    geo = SignalKPositionGeolocation(coordinator, discovery, entry)
+    geo._last_coords = (1.0, 2.0)
+    geo._last_available = True
+    geo._last_write = time.monotonic() - 60.0
+
+    # ~11 m away: over the 5 m default, well under the 25 m policy.
+    assert geo._should_write_state((1.0001, 2.0), True) is False
+    # ~110 m away: past the policy tolerance.
+    assert geo._should_write_state((1.001, 2.0), True) is True
+
+
+def test_geo_location_should_write_state_uses_policy_min_update() -> None:
+    entry = _make_entry()
+    spec = _position_spec(min_update_seconds=30.0)
+    discovery = SimpleNamespace(data=DiscoveryResult(entities=[spec], conflicts=[]))
+    coordinator = SignalKCoordinator(Mock(), entry, Mock(), Mock(), SignalKAuthManager(None))
+    geo = SignalKPositionGeolocation(coordinator, discovery, entry)
+    geo._last_coords = (1.0, 2.0)
+    geo._last_available = True
+    # Only 10 s ago: under the 30 s policy, though past the 5 s default.
+    geo._last_write = time.monotonic() - 10.0
+
+    assert geo._should_write_state((1.5, 2.5), True) is False
+
+
+def test_geo_location_state_attributes_report_policy_values() -> None:
+    entry = _make_entry()
+    spec = _position_spec(period_ms=10000, min_update_seconds=30.0, tolerance=25.0)
+    discovery = SimpleNamespace(data=DiscoveryResult(entities=[spec], conflicts=[]))
+    coordinator = SignalKCoordinator(Mock(), entry, Mock(), Mock(), SignalKAuthManager(None))
+    geo = SignalKPositionGeolocation(coordinator, discovery, entry)
+
+    attributes = geo.state_attributes
+    assert attributes["subscription_period_seconds"] == 10.0
+    assert attributes["min_update_ms"] == 30000
+    assert attributes["tolerance"] == 25.0
 
 
 def test_coord_distance() -> None:
